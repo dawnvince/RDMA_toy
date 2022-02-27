@@ -59,7 +59,7 @@ struct ConfigInfo initConfig(){
 	config_info.sock_port = "8977";
 
 	/* =============CONFIG HERE!!!============ */
-	config_info.gid_index = 1;
+	config_info.gid_index = 2;
 
 #ifdef SERVER
 	config_info.is_server = true;
