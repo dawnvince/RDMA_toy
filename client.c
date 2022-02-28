@@ -59,7 +59,7 @@ struct ConfigInfo initConfig(){
 	config_info.sock_port = "8977";
 
 	/* =============CONFIG HERE!!!============ */
-	config_info.gid_index = 1;
+	config_info.gid_index = 2;
 
 #ifdef SERVER
 	config_info.is_server = true;
@@ -102,7 +102,7 @@ struct IBRes {
 struct ConfigInfo config_info;
 
 
-int post_send(struct IBRes *ib_res, uint32_t req_size, int opcode){
+int post_send(struct IBRes *ib_res, uint32_t req_size, int opcode, int offset){
     struct ibv_send_wr sr;
     struct ibv_sge sge;
     struct ibv_send_wr *bad_wr = NULL;
@@ -124,8 +124,8 @@ int post_send(struct IBRes *ib_res, uint32_t req_size, int opcode){
 
     // prepare the scatter / gather entry
     memset(&sge, 0, sizeof(sge));
-    sge.addr = (uintptr_t)ib_res->ib_buf;
-    sge.length = req_size;
+    sge.addr = (uintptr_t)(ib_res->ib_buf + offset);
+    sge.length = req_size - offset;
     sge.lkey = ib_res->mr->lkey;
 
     // prepare the send work request
@@ -140,7 +140,7 @@ int post_send(struct IBRes *ib_res, uint32_t req_size, int opcode){
     sr.send_flags = IBV_SEND_SIGNALED;
 
     if(opcode != IBV_WR_SEND){
-        sr.wr.rdma.remote_addr = ib_res->remote_props.addr;
+        sr.wr.rdma.remote_addr = (ib_res->remote_props.addr) + offset;
         sr.wr.rdma.rkey = ib_res->remote_props.rkey;
     }
 
@@ -572,7 +572,7 @@ int main(){
     struct ibv_wc wc;
     // Operation RDMA send, Server send buf to Client
     if(config_info.is_server){
-        post_send(&ib_res, REQ_SIZE, IBV_WR_SEND);
+        post_send(&ib_res, REQ_SIZE, IBV_WR_SEND, 0);
     }
     poll_completion(&ib_res, &wc);
     if(!config_info.is_server){
@@ -589,15 +589,15 @@ int main(){
 
     // Operation RDMA read/write, Client side operation
     if(!config_info.is_server){
-        post_send(&ib_res, REQ_SIZE, IBV_WR_RDMA_READ);
+        post_send(&ib_res, REQ_SIZE, IBV_WR_RDMA_READ, 0);
         poll_completion(&ib_res, &wc);
         INFO("Contents of server's buffer: %s\n", ib_res.ib_buf);
 
-        content = "change again!";
+        content = "RNM, tuiqian!";
         strcpy(ib_res.ib_buf, content);
         INFO("Now replacing it with: %s\n", ib_res.ib_buf);
 
-        post_send(&ib_res, REQ_SIZE, IBV_WR_RDMA_WRITE);
+        post_send(&ib_res, REQ_SIZE, IBV_WR_RDMA_WRITE, 1);
         poll_completion(&ib_res, &wc);
     }
     // check if server memory has changed
