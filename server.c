@@ -15,6 +15,8 @@
 #include <stdbool.h>
 #include <netdb.h>
 
+#include "teatable.h"
+
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 static inline uint64_t htonll(uint64_t x) { return bswap_64(x); }
@@ -39,7 +41,7 @@ static inline uint64_t ntohll(uint64_t x) { return x; }
 #define IB_PORT			1
 #define MAX_POLL_CQ_TIMEOUT 5000 // 5s
 #define SERVER
-#define REQ_SIZE        15
+#define REQ_SIZE        99
 
 struct ConfigInfo{
     bool is_server;          /* if the current node is server */
@@ -59,7 +61,7 @@ struct ConfigInfo initConfig(){
 	config_info.sock_port = "8977";
 
 	/* =============CONFIG HERE!!!============ */
-	config_info.gid_index = 1;
+	config_info.gid_index = 2;
 
 #ifdef SERVER
 	config_info.is_server = true;
@@ -92,7 +94,7 @@ struct IBRes {
     struct ibv_device_attr	 dev_attr;
     struct QP_Info			 remote_props; // save remote side info
 
-    char   *ib_buf;
+    Tea_entry   *ib_buf;
     size_t  ib_buf_size;
 
     union ibv_gid my_gid;
@@ -167,6 +169,79 @@ int post_send(struct IBRes *ib_res, uint32_t req_size, int opcode){
     return -1;
 }
 
+// sig 0 indicates unsignaled/write
+int post_send_client(struct IBRes *ib_res, uint32_t req_size, int opcode, int index, int sig){
+    struct ibv_send_wr sr;
+    struct ibv_sge sge;
+    struct ibv_send_wr *bad_wr = NULL;
+
+    // struct ibv_sge sge = {
+    //     .addr   = (uintptr_t)ib_res->buf,
+    //     .length = req_size,
+    //     .lkey   = res->mr->lkey
+    // };
+
+    // struct ibv_send_wr sr = {
+    //     .wr_id      = 0,
+    //     .sg_list    = &sge,
+    //     .num_sge    = 1,
+    //     .opcode     = opcode,
+    //     .send_flags = IBV_SEND_SIGNALED,
+    //     .next       = NULL
+    // };
+
+    // prepare the scatter / gather entry
+    memset(&sge, 0, sizeof(sge));
+    sge.addr = (uintptr_t)ib_res->ib_buf;
+    sge.length = req_size;
+    sge.lkey = ib_res->mr->lkey;
+
+    // prepare the send work request
+    memset(&sr, 0, sizeof(sr));
+
+    sr.next = NULL;
+    sr.wr_id = 0;
+    sr.sg_list = &sge;
+
+    sr.num_sge = 1;
+    sr.opcode = opcode;
+    if(sig)sr.send_flags = IBV_SEND_SIGNALED;
+
+    if(opcode != IBV_WR_SEND){
+        // sr.wr.rdma.remote_addr = ib_res->remote_props.addr;
+        if(sig){
+            sr.wr.rdma.remote_addr = 
+                ib_res->remote_props.addr + index * sizeof(Tea_entry);
+        }
+        else{
+            uint64_t tmp = ib_res->remote_props.addr + index * sizeof(Tea_entry);
+            sr.wr.rdma.remote_addr = tmp + 4*sizeof(Ip_tuple);
+        }
+        sr.wr.rdma.rkey = ib_res->remote_props.rkey;
+    }
+
+    int ret = 0;
+    ret = ibv_post_send(ib_res->qp, &sr, &bad_wr);
+    check(ret == 0, "Failed to post SR");
+
+    switch (opcode){
+        case IBV_WR_SEND:
+            INFO("Send request was posted\n");
+            break;
+        case IBV_WR_RDMA_READ:
+            INFO("RDMA read request was posted\n");
+            break;
+        case IBV_WR_RDMA_WRITE:
+            INFO("RDMA write request was posted\n");
+            break;
+        default:
+            INFO("Unknown request was posted\n");
+            break;
+    }
+    return 0;
+ error:
+    return -1;
+}
 
 int post_receive(struct IBRes *ib_res, uint32_t req_size){
 	struct ibv_recv_wr rr;
@@ -462,6 +537,17 @@ struct IBRes ib_res;
 
 int main(){
 	config_info = initConfig();
+
+    /* ===============init teatable=================*/
+    INFOHeader("INIT TEATABLE");
+    
+    Tea_entry *tea_entrys = init_table();
+    Ip_tuple entry = {
+        .src_ip = 16,
+        .dst_ip = 32
+    };
+    insert_entry(tea_entrys, entry, 1);
+
 	/* ===============set up ib=================*/
 	int ret = 0;
 	memset (&ib_res, 0, sizeof(struct IBRes));
@@ -488,8 +574,8 @@ int main(){
     /* the recv buffer is of size msg_size * num_concurr_msgs */
     /* followed by a sending buffer of size msg_size since we */
     /* assume all msgs are of the same content */
-    ib_res.ib_buf_size = config_info.msg_size * (config_info.num_concurr_msgs + 1);
-    ib_res.ib_buf      = (char *) memalign (4096, ib_res.ib_buf_size);
+    ib_res.ib_buf_size =  100 * sizeof(Tea_entry) * (config_info.num_concurr_msgs + 1);
+    ib_res.ib_buf      = tea_entrys;
     check (ib_res.ib_buf != NULL, "Failed to allocate ib_buf");
 
     ib_res.mr = ibv_reg_mr (ib_res.pd, (void *)ib_res.ib_buf,
@@ -519,7 +605,7 @@ int main(){
 	ib_res.my_gid = my_gid;
 
     INFOHeader("CREATE CQ AND QP");
-    int cq_size = 1;
+    int cq_size = 10;
     ib_res.cq = ibv_create_cq (ib_res.ctx, cq_size, 
 			       NULL, NULL, 0);
     check (ib_res.cq != NULL, "Failed to create cq");
@@ -564,46 +650,35 @@ int main(){
         ibv_free_device_list(dev_list);
     INFO("CONNECT QP SUCCESS\n");
 
-    char *content = "I love china!";
-    if(config_info.is_server)strcpy(ib_res.ib_buf, content);
-
+    /*==========================RDMA=========================*/
     INFOHeader("RDMA OPERATIONS");
 
     struct ibv_wc wc;
-    // Operation RDMA send, Server send buf to Client
-    if(config_info.is_server){
-        post_send(&ib_res, REQ_SIZE, IBV_WR_SEND);
-    }
-    poll_completion(&ib_res, &wc);
-    if(!config_info.is_server){
-        INFO("Message is: %s\n", ib_res.ib_buf);
-    }
-    else{
-        content = "you love china too";
-        strcpy(ib_res.ib_buf, content);
-        INFO("Change msg to: you love china too");
-    }
 
     char tmp_char;
     sock_sync_data(peer_sock, 1, "Q", &tmp_char);
 
     // Operation RDMA read/write, Client side operation
+    INFO("ibbuf is %lx\n", ib_res.ib_buf);
+    INFO("Contents of server's buffer: %d %d %s\n", 
+            ib_res.ib_buf[1].entries[0].src_ip, ib_res.ib_buf[01].entries[0].dst_ip, 
+            ib_res.ib_buf[1].str);
+    INFO("Their addrs are %lx , %lx\n", &ib_res.ib_buf[1].entries[0].src_ip, &ib_res.ib_buf[1].str)
+
+
     if(!config_info.is_server){
-        post_send(&ib_res, REQ_SIZE, IBV_WR_RDMA_READ);
+        int index = 1;
+        char *str = "Packet content here.";
+        post_send_client(&ib_res, REQ_SIZE, IBV_WR_RDMA_WRITE, index, 0);
+        post_send_client(&ib_res, sizeof(Tea_entry), IBV_WR_RDMA_READ, index, 1);
         poll_completion(&ib_res, &wc);
-        INFO("Contents of server's buffer: %s\n", ib_res.ib_buf);
+        INFO("Contents of server's buffer: %d %d %s\n", 
+            ib_res.ib_buf[0].entries[0].src_ip, ib_res.ib_buf[0].entries[0].dst_ip, 
+            ib_res.ib_buf[0].str);
 
-        content = "change again!";
-        strcpy(ib_res.ib_buf, content);
-        INFO("Now replacing it with: %s\n", ib_res.ib_buf);
-
-        post_send(&ib_res, REQ_SIZE, IBV_WR_RDMA_WRITE);
-        poll_completion(&ib_res, &wc);
     }
     // check if server memory has changed
     sock_sync_data(peer_sock, 1, "W", &tmp_char);
-    if (config_info.is_server)
-        INFO("Contents of server buffer: %s\n", ib_res.ib_buf);
 
 
     close_ib_connection(&ib_res);
