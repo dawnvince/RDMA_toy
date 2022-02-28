@@ -45,7 +45,6 @@ static inline uint64_t ntohll(uint64_t x) { return x; }
 
 struct ConfigInfo{
     bool is_server;          /* if the current node is server */
-    int msg_size;           /* the size of each echo message */
     int num_concurr_msgs;   /* the number of messages can be sent concurrently */
     char *sock_port;         /* socket port number */
     char *server_name;       /* server name */
@@ -56,7 +55,6 @@ struct ConfigInfo{
 
 struct ConfigInfo initConfig(){
     struct ConfigInfo config_info;
-    config_info.msg_size = 100;
     config_info.num_concurr_msgs = 1;
     config_info.sock_port = "8977";
 
