@@ -97,10 +97,6 @@ struct IBRes {
     Tea_entry   *ib_buf;
     size_t  ib_buf_size;
 
-    char    *ib_content;
-    size_t  ib_content_size;
-    struct  ibv_mr       *cmr;
-
     union ibv_gid my_gid;
 };
 
@@ -112,21 +108,6 @@ int post_send(struct IBRes *ib_res, uint32_t req_size, int opcode){
     struct ibv_send_wr sr;
     struct ibv_sge sge;
     struct ibv_send_wr *bad_wr = NULL;
-
-    // struct ibv_sge sge = {
-    //     .addr   = (uintptr_t)ib_res->buf,
-    //     .length = req_size,
-    //     .lkey   = res->mr->lkey
-    // };
-
-    // struct ibv_send_wr sr = {
-    //     .wr_id      = 0,
-    //     .sg_list    = &sge,
-    //     .num_sge    = 1,
-    //     .opcode     = opcode,
-    //     .send_flags = IBV_SEND_SIGNALED,
-    //     .next       = NULL
-    // };
 
     // prepare the scatter / gather entry
     memset(&sge, 0, sizeof(sge));
@@ -179,21 +160,6 @@ int post_send_client_read(struct IBRes *ib_res, uint32_t req_size, int index){
     struct ibv_sge sge;
     struct ibv_send_wr *bad_wr = NULL;
 
-    // struct ibv_sge sge = {
-    //     .addr   = (uintptr_t)ib_res->buf,
-    //     .length = req_size,
-    //     .lkey   = res->mr->lkey
-    // };
-
-    // struct ibv_send_wr sr = {
-    //     .wr_id      = 0,
-    //     .sg_list    = &sge,
-    //     .num_sge    = 1,
-    //     .opcode     = opcode,
-    //     .send_flags = IBV_SEND_SIGNALED,
-    //     .next       = NULL
-    // };
-
     // prepare the scatter / gather entry
     memset(&sge, 0, sizeof(sge));
     sge.addr = (uintptr_t)ib_res->ib_buf;
@@ -215,12 +181,12 @@ int post_send_client_read(struct IBRes *ib_res, uint32_t req_size, int index){
                 ib_res->remote_props.addr + index * sizeof(Tea_entry);
     sr.wr.rdma.rkey = ib_res->remote_props.rkey;
 
-    INFO("sizeof Ip_tuple is %d\n", sizeof(Ip_tuple));
-    INFO("sizeof Tea_entry is %d\n", sizeof(Tea_entry));
-    INFO("addr ibbuf is %lx\n", ib_res->ib_buf);
-    INFO("addr sge.addr is %lx\n", sge.addr);
-    INFO("addr remote_props.addr is %lx\n", ib_res->remote_props.addr);
-    INFO("addr sr.wr.rdma.remote_addr is %lx\n", sr.wr.rdma.remote_addr);
+    // INFO("sizeof Ip_tuple is %d\n", sizeof(Ip_tuple));
+    // INFO("sizeof Tea_entry is %d\n", sizeof(Tea_entry));
+    // INFO("addr ibbuf is %lx\n", ib_res->ib_buf);
+    // INFO("addr sge.addr is %lx\n", sge.addr);
+    // INFO("addr remote_props.addr is %lx\n", ib_res->remote_props.addr);
+    // INFO("addr sr.wr.rdma.remote_addr is %lx\n", sr.wr.rdma.remote_addr);
 
 
     int ret = 0;
@@ -234,31 +200,16 @@ int post_send_client_read(struct IBRes *ib_res, uint32_t req_size, int index){
     return -1;
 }
 
-int post_send_client_write(struct IBRes *ib_res, uint32_t req_size, int index){
+int post_send_client_write_unsignal(struct IBRes *ib_res, int index){
     struct ibv_send_wr sr;
     struct ibv_sge sge;
     struct ibv_send_wr *bad_wr = NULL;
 
-    // struct ibv_sge sge = {
-    //     .addr   = (uintptr_t)ib_res->buf,
-    //     .length = req_size,
-    //     .lkey   = res->mr->lkey
-    // };
-
-    // struct ibv_send_wr sr = {
-    //     .wr_id      = 0,
-    //     .sg_list    = &sge,
-    //     .num_sge    = 1,
-    //     .opcode     = opcode,
-    //     .send_flags = IBV_SEND_SIGNALED,
-    //     .next       = NULL
-    // };
-
     // prepare the scatter / gather entry
     memset(&sge, 0, sizeof(sge));
-    sge.addr = (uintptr_t)ib_res->ib_content;
+    sge.addr = (uintptr_t)ib_res->ib_buf;
     sge.length = ib_res->ib_buf_size;
-    sge.lkey = ib_res->cmr->lkey;
+    sge.lkey = ib_res->mr->lkey;
 
     // prepare the send work request
     memset(&sr, 0, sizeof(sr));
@@ -270,19 +221,20 @@ int post_send_client_write(struct IBRes *ib_res, uint32_t req_size, int index){
     sr.num_sge = 1;
     sr.opcode = IBV_WR_RDMA_WRITE;
     //if(sig)
-        sr.send_flags = IBV_SEND_SIGNALED;
+        //sr.send_flags = IBV_SEND_SIGNALED;
 
     sge.addr = (uintptr_t)ib_res->ib_buf + 4 * sizeof(Ip_tuple);
-            uint64_t tmp = ib_res->remote_props.addr + index * sizeof(Tea_entry);
-            sr.wr.rdma.remote_addr = tmp + 4*sizeof(Ip_tuple);
+    sge.length = sge.length = ib_res->ib_buf_size - 4 * sizeof(Ip_tuple);
+    uint64_t tmp = ib_res->remote_props.addr + index * sizeof(Tea_entry);
+    sr.wr.rdma.remote_addr = tmp + 4*sizeof(Ip_tuple);
     sr.wr.rdma.rkey = ib_res->remote_props.rkey;
 
-    INFO("sizeof Ip_tuple is %d\n", sizeof(Ip_tuple));
-    INFO("sizeof Tea_entry is %d\n", sizeof(Tea_entry));
-    INFO("addr ibbuf is %lx\n", ib_res->ib_buf);
-    INFO("addr sge.addr is %lx\n", sge.addr);
-    INFO("addr remote_props.addr is %lx\n", ib_res->remote_props.addr);
-    INFO("addr sr.wr.rdma.remote_addr is %lx\n", sr.wr.rdma.remote_addr);
+    // INFO("sizeof Ip_tuple is %d\n", sizeof(Ip_tuple));
+    // INFO("sizeof Tea_entry is %d\n", sizeof(Tea_entry));
+    // INFO("addr ibbuf is %lx\n", ib_res->ib_buf);
+    // INFO("addr sge.addr is %lx\n", sge.addr);
+    // INFO("addr remote_props.addr is %lx\n", ib_res->remote_props.addr);
+    // INFO("addr sr.wr.rdma.remote_addr is %lx\n", sr.wr.rdma.remote_addr);
 
 
     int ret = 0;
@@ -300,19 +252,6 @@ int post_receive(struct IBRes *ib_res, uint32_t req_size){
     struct ibv_recv_wr rr;
     struct ibv_sge sge;
     struct ibv_recv_wr *bad_wr;
-
-    // struct ibv_sge list = {
-    //     .addr   = (uintptr_t)ib_res->buf,
-    //     .length = req_size,
-    //     .lkey   = ib_res->mr->lkey
-    // };
-
-    // struct ibv_recv_wr rr = {
-    //     .wr_id   = 0,
-    //     .sg_list = &sge,
-    //     .num_sge = 1,
-    //     .next    = NULL
-    // };
 
     // prepare the scatter / gather entry
     memset(&sge, 0, sizeof(sge));
@@ -594,14 +533,22 @@ int main(){
     /* ===============init teatable=================*/
     INFOHeader("INIT TEATABLE");
     
-    Tea_entry *tea_entrys = init_table();
-    Ip_tuple entry = {
-        .src_ip = 16,
-        .dst_ip = 32,
-    };
-    insert_entry(tea_entrys, entry, 1);
-    char *str = "Packet content here.";
-    // strcpy(tea_entrys[1].str, str);
+    Tea_entry *tea_entrys = NULL;
+    if(config_info.is_server){
+        tea_entrys = init_table();
+        Ip_tuple entry = {
+            .src_ip = 16,
+            .dst_ip = 32,
+        };
+        insert_entry(tea_entrys, entry, 1);
+    }
+    else{
+        Tea_entry tea;
+        tea_entrys = &tea;
+
+        char *str = "Packet content here.";
+        strcpy(tea_entrys->str, str);
+    }
 
     /* ===============set up ib=================*/
     int ret = 0;
@@ -653,16 +600,6 @@ int main(){
                     IBV_ACCESS_REMOTE_WRITE);
         check (ib_res.mr != NULL, "Failed to register mr");
 
-        ib_res.ib_content_size = REQ_SIZE;
-        ib_res.ib_content = str;
-        check (ib_res.ib_content != NULL, "Failed to allocate ib_content");
-
-        ib_res.cmr = ibv_reg_mr (ib_res.pd, (void *)ib_res.ib_content,
-                    ib_res.ib_content_size,
-                    IBV_ACCESS_LOCAL_WRITE |
-                    IBV_ACCESS_REMOTE_READ |
-                    IBV_ACCESS_REMOTE_WRITE);
-        check (ib_res.cmr != NULL, "Failed to register cmr");
     }
 
     /* query IB device attr */
@@ -741,8 +678,8 @@ int main(){
     // Operation RDMA read/write, Client side operation
     if(!config_info.is_server){
         int index = 1;
-        post_send_client_write(&ib_res, REQ_SIZE, index);
-        poll_completion(&ib_res, &wc);
+        post_send_client_write_unsignal(&ib_res, index);
+        //poll_completion(&ib_res, &wc);
         post_send_client_read(&ib_res, sizeof(Tea_entry), index);
         poll_completion(&ib_res, &wc);
         INFO("Contents of server's buffer: %d %d %s\n", 
