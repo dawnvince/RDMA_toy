@@ -1,4 +1,3 @@
-#define ENTRY_NUM 1000
 #define STRING_LEN 100
 
 #include <stdio.h>
@@ -22,7 +21,7 @@ typedef struct{
     char str[STRING_LEN];
 }Tea_entry;
 
-Tea_entry* init_table();
-void insert_entry(Tea_entry* tea_entrys, Ip_tuple entry, int index);
+Tea_entry* init_table(int len);
+void insert_entry(Tea_entry* tea_entrys, Ip_tuple entry, int len, int index);
 Tea_entry lookup_entry(Tea_entry* tea_entrys, Ip_tuple entry, int index);
 void free_table(Tea_entry* tea_entrys);

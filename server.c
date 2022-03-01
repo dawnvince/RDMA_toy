@@ -42,6 +42,7 @@ static inline uint64_t ntohll(uint64_t x) { return x; }
 #define MAX_POLL_CQ_TIMEOUT 5000 // 5s
 #define SERVER
 #define REQ_SIZE        99
+#define ENTRY_NUM       100
 
 struct ConfigInfo{
     bool is_server;          /* if the current node is server */
@@ -100,6 +101,14 @@ struct IBRes {
 
 
 struct ConfigInfo config_info;
+
+
+static unsigned int seed = 0;
+static int my_rand(int len){
+    ++seed;
+    srand((unsigned)time(NULL) + seed);
+    return rand() % len;
+}
 
 
 int post_send(struct IBRes *ib_res, uint32_t req_size, int opcode){
@@ -198,15 +207,15 @@ int post_send_client_read(struct IBRes *ib_res, uint32_t req_size, int index){
     return -1;
 }
 
-int post_send_client_write_unsignal(struct IBRes *ib_res, int index){
+int post_send_client_write_unsignal(struct IBRes *ib_res, uint32_t req_size, int index){
     struct ibv_send_wr sr;
     struct ibv_sge sge;
     struct ibv_send_wr *bad_wr = NULL;
 
     // prepare the scatter / gather entry
     memset(&sge, 0, sizeof(sge));
-    sge.addr = (uintptr_t)ib_res->ib_buf;
-    sge.length = ib_res->ib_buf_size;
+    sge.addr = (uintptr_t)ib_res->ib_buf + req_size;
+    sge.length = sge.length = ib_res->ib_buf_size - req_size;
     sge.lkey = ib_res->mr->lkey;
 
     // prepare the send work request
@@ -221,10 +230,8 @@ int post_send_client_write_unsignal(struct IBRes *ib_res, int index){
     //if(sig)
         //sr.send_flags = IBV_SEND_SIGNALED;
 
-    sge.addr = (uintptr_t)ib_res->ib_buf + 4 * sizeof(Ip_tuple);
-    sge.length = sge.length = ib_res->ib_buf_size - 4 * sizeof(Ip_tuple);
     uint64_t tmp = ib_res->remote_props.addr + index * sizeof(Tea_entry);
-    sr.wr.rdma.remote_addr = tmp + 4*sizeof(Ip_tuple);
+    sr.wr.rdma.remote_addr = tmp + req_size;
     sr.wr.rdma.rkey = ib_res->remote_props.rkey;
 
     // INFO("sizeof Ip_tuple is %d\n", sizeof(Ip_tuple));
@@ -310,6 +317,15 @@ int poll_completion(struct IBRes *ib_res, struct ibv_wc *wc){
     return 0;
 }
 
+int lookup_operation(struct IBRes *ib_res, struct ibv_wc *wc,int index){
+    post_send_client_write_unsignal(ib_res, 4 * sizeof(Ip_tuple), index);
+    post_send_client_read(ib_res, sizeof(Tea_entry), index);
+    poll_completion(ib_res, wc);
+    INFO("Contents of index %d buffer: %d %d %d %d %s\n", index,
+            ib_res->ib_buf[0].entries[0].src_ip, ib_res->ib_buf[0].entries[0].dst_ip,
+            ib_res->ib_buf[0].entries[1].src_ip, ib_res->ib_buf[0].entries[1].dst_ip,
+            ib_res->ib_buf[0].str);
+}
 
 int modify_qp_to_rtr(struct ibv_qp *qp, uint32_t remote_qpn,
                             uint16_t dlid, uint8_t *dgid) {
@@ -518,7 +534,8 @@ void close_ib_connection (struct IBRes *ib_res){
     if (ib_res->mr != NULL)ibv_dereg_mr (ib_res->mr);
     if (ib_res->pd != NULL)ibv_dealloc_pd (ib_res->pd);
     if (ib_res->ctx != NULL)ibv_close_device (ib_res->ctx);
-    if (ib_res->ib_buf != NULL)free (ib_res->ib_buf);
+    if(config_info.is_server)
+        if (ib_res->ib_buf != NULL)free (ib_res->ib_buf);
 }
 
 
@@ -533,12 +550,19 @@ int main(){
     
     Tea_entry *tea_entrys = NULL;
     if(config_info.is_server){
-        tea_entrys = init_table();
-        Ip_tuple entry = {
-            .src_ip = 16,
-            .dst_ip = 32,
-        };
-        insert_entry(tea_entrys, entry, 1);
+        tea_entrys = init_table(ENTRY_NUM);
+        for(int i = 0; i < ENTRY_NUM; ++i){
+            Ip_tuple entry1 = {
+                .src_ip = 16 + i,
+                .dst_ip = 32 + i,
+            };
+            insert_entry(tea_entrys, entry1, ENTRY_NUM, i);
+            Ip_tuple entry2 = {
+                .src_ip = 32 + i,
+                .dst_ip = 64 + i,
+            };
+            insert_entry(tea_entrys, entry2, ENTRY_NUM, i);
+        }
     }
     else{
         Tea_entry tea;
@@ -575,7 +599,7 @@ int main(){
     /* followed by a sending buffer of size msg_size since we */
     /* assume all msgs are of the same content */
     if(config_info.is_server){
-        ib_res.ib_buf_size =  100 * sizeof(Tea_entry) * (config_info.num_concurr_msgs + 1);
+        ib_res.ib_buf_size =  ENTRY_NUM * sizeof(Tea_entry);
         ib_res.ib_buf      = tea_entrys;
         check (ib_res.ib_buf != NULL, "Failed to allocate ib_buf");
 
@@ -587,7 +611,7 @@ int main(){
         check (ib_res.mr != NULL, "Failed to register mr");
     }
     else{
-        ib_res.ib_buf_size = sizeof(Tea_entry) * (config_info.num_concurr_msgs + 1);
+        ib_res.ib_buf_size = sizeof(Tea_entry);
         ib_res.ib_buf      = tea_entrys;
         check (ib_res.ib_buf != NULL, "Failed to allocate ib_buf");
 
@@ -676,13 +700,11 @@ int main(){
     // Operation RDMA read/write, Client side operation
     if(!config_info.is_server){
         int index = 1;
-        post_send_client_write_unsignal(&ib_res, index);
-        //poll_completion(&ib_res, &wc);
-        post_send_client_read(&ib_res, sizeof(Tea_entry), index);
-        poll_completion(&ib_res, &wc);
-        INFO("Contents of server's buffer: %d %d %s\n", 
-            ib_res.ib_buf[0].entries[0].src_ip, ib_res.ib_buf[0].entries[0].dst_ip, 
-            ib_res.ib_buf[0].str);
+        lookup_operation(&ib_res, &wc, index);
+        for(int i = 0;i < 4;++i){
+            index = my_rand(ENTRY_NUM);
+            lookup_operation(&ib_res, &wc, index);
+        }
 
     }
     // check if server memory has changed
